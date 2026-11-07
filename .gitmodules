@@ -1,3 +1,6 @@
 [submodule "platform"]
 	path = platform
 	url = https://github.com/openlybuilt/openboard-platform.git
+[submodule "whiteboard-backend"]
+	path = whiteboard-backend
+	url = https://github.com/openlybuilt/whiteboard-backend.git
