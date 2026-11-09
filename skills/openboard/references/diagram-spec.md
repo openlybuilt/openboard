@@ -1,6 +1,6 @@
 # Diagram specification
 
-The builder accepts JSON with `title`, optional `canvas`, `elements`, and `connections`. Coordinates are absolute pixels. IDs are unique strings. Put large containers before their contents so they render behind them. An optional `container` names a `frame` element and is saved as its OpenBoard `frameId`.
+Use this after the [semantic map](semantic-map.md) and the selected diagram-type guide have established the meaning and layout. The builder accepts JSON with `title`, optional `canvas`, `elements`, and `connections`. Coordinates are absolute pixels. IDs are unique strings. Put large containers before their contents so they render behind them. An optional `container` names a `frame` element and is saved as its OpenBoard `frameId`.
 
 ```json
 {
@@ -28,10 +28,3 @@ The builder accepts JSON with `title`, optional `canvas`, `elements`, and `conne
 Shape fields: `fill`, `stroke`, `strokeWidth`, `dashed`, `fontSize`, `textColor`, and `container`. Colors must be six-digit hex codes or `transparent`. The default canvas is white and plain; `background` may be `plain`, `dots`, or `grid`.
 
 Connections use `from` and `to` shape IDs, optional `label`, `labelAt`, `stroke`, `dashed`, `axis`, and `via`. `axis` is `auto`, `vertical`, or `horizontal` and controls which sides connect. `via` is a list of absolute `[x,y]` waypoints; the builder inserts elbows between diagonal waypoints. Without it, the builder routes around shapes and labels. If a manual route crosses content, the builder replaces it with a clear automatic route and reports that change. `labelAt` proposes the top-left position of a label as an absolute `[x,y]`; the builder moves it to a clear area when necessary. A connection is saved as an editable, bound OpenBoard arrow.
-
-## Designing from references
-
-- **Architecture:** Establish containers first, then services within each boundary. Use one color family per domain and keep cross-boundary arrows visibly distinct.
-- **Organization chart:** Place leaders above reports, align siblings, and use repeated card dimensions. Route each branch through a shared horizontal level when it helps reveal hierarchy.
-- **Swimlane process:** Give each actor a horizontal frame, put tasks within its lane, and reserve clear corridors between lanes for transitions and return loops.
-- **All diagrams:** Keep labels short, use font sizes that remain readable in the preview, and inspect every arrow endpoint. If an image's content is unclear, preserve its visible relationships and avoid inventing missing labels.
