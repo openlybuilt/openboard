@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from render_preview import render_svg
+from route_connections import label_position, route_connection, validate_arrow_clearance
 
 SHAPES = {"rectangle", "ellipse", "diamond", "frame", "code"}
 STROKES = {"line", "arrow", "freehand"}
@@ -102,48 +103,6 @@ def text_element(element_id, text, x, y, width, height, font_size, ink, order,
     return item
 
 
-def connection_ends(source, target, preferred="auto"):
-    sx = source["x"] + source["width"] / 2
-    sy = source["y"] + source["height"] / 2
-    tx = target["x"] + target["width"] / 2
-    ty = target["y"] + target["height"] / 2
-    dx, dy = tx - sx, ty - sy
-    horizontal = abs(dx) / max(source["width"] + target["width"], 1) >= abs(dy) / max(source["height"] + target["height"], 1)
-    if preferred == "horizontal":
-        horizontal = True
-    elif preferred == "vertical":
-        horizontal = False
-    if horizontal:
-        return ([source["x"] + (source["width"] if dx >= 0 else 0), sy],
-                [target["x"] + (0 if dx >= 0 else target["width"]), ty], "horizontal")
-    return ([sx, source["y"] + (source["height"] if dy >= 0 else 0)],
-            [tx, target["y"] + (0 if dy >= 0 else target["height"])], "vertical")
-
-
-def route(source, target, via, preferred="auto"):
-    start, end, axis = connection_ends(source, target, preferred)
-    if via:
-        raw = [start, *[point(p, "connection via") for p in via], end]
-        result = [start]
-        for index, next_point in enumerate(raw[1:], 1):
-            current = result[-1]
-            if current[0] != next_point[0] and current[1] != next_point[1]:
-                if index == len(raw) - 1:
-                    elbow = [current[0], next_point[1]] if axis == "horizontal" else [next_point[0], current[1]]
-                else:
-                    elbow = [next_point[0], current[1]] if axis == "horizontal" else [current[0], next_point[1]]
-                if elbow != current:
-                    result.append(elbow)
-            if next_point != result[-1]:
-                result.append(next_point)
-        return result
-    if axis == "horizontal":
-        middle = (start[0] + end[0]) / 2
-        return [start, [middle, start[1]], [middle, end[1]], end]
-    middle = (start[1] + end[1]) / 2
-    return [start, [start[0], middle], [end[0], middle], end]
-
-
 def path_element(element_id, kind, absolute_points, order, ink="#374151", dashed=False,
                  start_binding=None, end_binding=None):
     if len(absolute_points) < 2:
@@ -211,6 +170,7 @@ def compile_board(spec):
             parent = by_id[parent].get("container")
     elements = []
     shapes = {}
+    previous_routes = []
 
     def add(item):
         item["index"] = order_key(len(elements))
@@ -307,9 +267,14 @@ def compile_board(spec):
         axis = connection.get("axis", "auto")
         if axis not in {"auto", "horizontal", "vertical"}:
             fail(f"connection {ordinal}.axis must be auto, horizontal, or vertical")
-        absolute = route(shapes[source_id], shapes[target_id], via, axis)
+        checked_via = [point(p, f"connection {ordinal}.via") for p in via]
+        absolute, warnings = route_connection(shapes[source_id], shapes[target_id], elements,
+                                              width, height, axis, checked_via, previous_routes)
+        for warning in warnings:
+            print(f"connection {ordinal} ({source_id} → {target_id}): {warning}", file=sys.stderr)
         if any(px < 0 or py < 0 or px > width or py > height for px, py in absolute):
             fail(f"connection {ordinal}: route extends beyond the canvas")
+        previous_routes.append(absolute)
         binding = lambda target: {"elementId": target, "focus": 0, "gap": 2}
         arrow = path_element(connection_id, "arrow", absolute, len(elements), ink,
                              connection.get("dashed", False), binding(source_id), binding(target_id))
@@ -320,13 +285,16 @@ def compile_board(spec):
         if label:
             if not isinstance(label, str):
                 fail(f"connection {ordinal}.label must be a string")
-            mid = point(connection["labelAt"], f"connection {ordinal}.labelAt") if "labelAt" in connection else absolute[len(absolute) // 2]
+            preferred_label = point(connection["labelAt"], f"connection {ordinal}.labelAt") if "labelAt" in connection else None
+            label_x, label_y = label_position(label, absolute, elements, previous_routes,
+                                              width, height, preferred_label)
             label_id = connection_id + "-label"
             if label_id in ids:
                 fail(f"generated label id conflicts with {label_id}")
             ids.add(label_id)
-            add(text_element(label_id, label, mid[0] + 5, mid[1] - 24,
-                             max(80, len(label) * 9), 22, 14, ink, len(elements)))
+            add(text_element(label_id, label, label_x, label_y,
+                             max(80, len(label) * 8.5), 22, 14, ink, len(elements)))
+    validate_arrow_clearance(elements)
     return {
         "type": "excalidraw", "version": 2, "source": "openboard-skill",
         "elements": elements,
