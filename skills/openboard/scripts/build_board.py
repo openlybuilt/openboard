@@ -196,9 +196,19 @@ def compile_board(spec):
         if definition.get("type") not in TYPES:
             fail(f"{element_id}: unsupported element type")
     frames = {d["id"] for d in definitions if d["type"] == "frame"}
+    by_id = {d["id"]: d for d in definitions}
     for definition in definitions:
-        if definition.get("container") is not None and definition["container"] not in frames:
+        parent = definition.get("container")
+        if parent is not None and (not isinstance(parent, str) or parent not in frames):
             fail(f"{definition['id']}: container must refer to a frame")
+        seen = {definition["id"]}
+        while parent is not None:
+            if not isinstance(parent, str) or parent not in frames:
+                fail(f"{definition['id']}: container must refer to a frame")
+            if parent in seen:
+                fail(f"{definition['id']}: frame containment cannot form a cycle")
+            seen.add(parent)
+            parent = by_id[parent].get("container")
     elements = []
     shapes = {}
 
@@ -212,6 +222,8 @@ def compile_board(spec):
         element_id, kind = definition["id"], definition["type"]
         x = number(definition.get("x"), f"{element_id}.x")
         y = number(definition.get("y"), f"{element_id}.y")
+        if x < 0 or y < 0 or x > width or y > height:
+            fail(f"{element_id}: origin must be inside the canvas")
         stroke = color(definition.get("stroke", "#374151"), f"{element_id}.stroke")
         fill = color(definition.get("fill", "#ffffff"), f"{element_id}.fill")
         ink = color(definition.get("textColor", "#17212d"), f"{element_id}.textColor")
@@ -220,6 +232,15 @@ def compile_board(spec):
         if kind in SHAPES:
             w = number(definition.get("width"), f"{element_id}.width", True)
             h = number(definition.get("height"), f"{element_id}.height", True)
+            if x + w > width or y + h > height:
+                fail(f"{element_id}: shape extends beyond the canvas")
+            if frame_id is not None:
+                parent = by_id[frame_id]
+                px, py = number(parent.get("x"), f"{frame_id}.x"), number(parent.get("y"), f"{frame_id}.y")
+                pw = number(parent.get("width"), f"{frame_id}.width", True)
+                ph = number(parent.get("height"), f"{frame_id}.height", True)
+                if x < px or y < py or x + w > px + pw or y + h > py + ph:
+                    fail(f"{element_id}: shape must fit inside frame {frame_id}")
             item = base_element(element_id, "rectangle" if kind == "code" else kind,
                                 x, y, w, h, stroke, fill, len(elements), definition.get("dashed", False))
             item["strokeWidth"] = number(definition.get("strokeWidth", 2), f"{element_id}.strokeWidth", True)
@@ -244,6 +265,7 @@ def compile_board(spec):
                 label_id = element_id + "-label"
                 if label_id in ids:
                     fail(f"generated label id conflicts with {label_id}")
+                ids.add(label_id)
                 add(text_element(label_id, text, x + 12, y + (h - text_h) / 2, w - 24,
                                  text_h, font_size, ink, len(elements), element_id, "center", frame_id))
                 item["boundElements"].append({"type": "text", "id": label_id})
@@ -253,6 +275,8 @@ def compile_board(spec):
                 fail(f"{element_id}.text must be a string")
             w = number(definition.get("width", max(100, len(text) * font_size * 0.6)), f"{element_id}.width", True)
             h = number(definition.get("height", max(30, (text.count("\n") + 1) * font_size * 1.25)), f"{element_id}.height", True)
+            if x + w > width or y + h > height:
+                fail(f"{element_id}: text extends beyond the canvas")
             add(text_element(element_id, wrapped(text, w, font_size), x, y, w, h,
                              font_size, ink, len(elements), frame_id=frame_id))
         else:
@@ -260,6 +284,8 @@ def compile_board(spec):
             if not isinstance(points, list):
                 fail(f"{element_id}.points must be an array")
             absolute = [[x + px, y + py] for px, py in [point(p, f"{element_id}.points") for p in points]]
+            if any(px < 0 or py < 0 or px > width or py > height for px, py in absolute):
+                fail(f"{element_id}: path extends beyond the canvas")
             item = path_element(element_id, "freedraw" if kind == "freehand" else kind,
                                 absolute, len(elements), stroke, definition.get("dashed", False))
             item["frameId"] = frame_id
@@ -268,7 +294,7 @@ def compile_board(spec):
         if not isinstance(connection, dict):
             fail("every connection must be an object")
         source_id, target_id = connection.get("from"), connection.get("to")
-        if source_id not in shapes or target_id not in shapes or source_id == target_id:
+        if not isinstance(source_id, str) or not isinstance(target_id, str) or source_id not in shapes or target_id not in shapes or source_id == target_id:
             fail(f"connection {ordinal}: from/to must be different shape IDs")
         connection_id = connection.get("id", f"connection-{ordinal + 1}")
         if not isinstance(connection_id, str) or connection_id in ids:
@@ -282,6 +308,8 @@ def compile_board(spec):
         if axis not in {"auto", "horizontal", "vertical"}:
             fail(f"connection {ordinal}.axis must be auto, horizontal, or vertical")
         absolute = route(shapes[source_id], shapes[target_id], via, axis)
+        if any(px < 0 or py < 0 or px > width or py > height for px, py in absolute):
+            fail(f"connection {ordinal}: route extends beyond the canvas")
         binding = lambda target: {"elementId": target, "focus": 0, "gap": 2}
         arrow = path_element(connection_id, "arrow", absolute, len(elements), ink,
                              connection.get("dashed", False), binding(source_id), binding(target_id))
@@ -293,7 +321,11 @@ def compile_board(spec):
             if not isinstance(label, str):
                 fail(f"connection {ordinal}.label must be a string")
             mid = point(connection["labelAt"], f"connection {ordinal}.labelAt") if "labelAt" in connection else absolute[len(absolute) // 2]
-            add(text_element(connection_id + "-label", label, mid[0] + 5, mid[1] - 24,
+            label_id = connection_id + "-label"
+            if label_id in ids:
+                fail(f"generated label id conflicts with {label_id}")
+            ids.add(label_id)
+            add(text_element(label_id, label, mid[0] + 5, mid[1] - 24,
                              max(80, len(label) * 9), 22, 14, ink, len(elements)))
     return {
         "type": "excalidraw", "version": 2, "source": "openboard-skill",
